@@ -1,189 +1,230 @@
 import streamlit as st
+from collections import deque
 
 # =====================================================
 # CONFIG
 # =====================================================
 st.set_page_config(
-    page_title="Football Studio – AI FINAL (Baixo Erro)",
-    layout="wide"
+    page_title="Football Studio PRO ULTIMATE",
+    layout="centered"
 )
+
+MAX_HISTORY = 120
 
 # =====================================================
 # STATE
 # =====================================================
 if "history" not in st.session_state:
-    st.session_state.history = []
+    st.session_state.history = deque(maxlen=MAX_HISTORY)
 
 if "cycle_memory" not in st.session_state:
     st.session_state.cycle_memory = []
 
+if "bank" not in st.session_state:
+    st.session_state.bank = 1000.0
+
+if "profit" not in st.session_state:
+    st.session_state.profit = 0.0
+
+if "rounds_without_draw" not in st.session_state:
+    st.session_state.rounds_without_draw = 0
+
 # =====================================================
 # UI
 # =====================================================
-st.title("⚽ Football Studio – AI FINAL")
+st.title("⚽ Football Studio – PRO ULTIMATE")
 
-c1, c2, c3, c4 = st.columns(4)
+c1, c2, c3 = st.columns(3)
 if c1.button("🔴 Home"):
-    st.session_state.history.insert(0, "🔴")
+    st.session_state.history.appendleft("R")
 if c2.button("🔵 Away"):
-    st.session_state.history.insert(0, "🔵")
+    st.session_state.history.appendleft("B")
 if c3.button("🟡 Draw"):
-    st.session_state.history.insert(0, "🟡")
-if c4.button("Reset"):
-    st.session_state.history.clear()
-    st.session_state.cycle_memory.clear()
+    st.session_state.history.appendleft("D")
+
+st.markdown(f"### 💰 Banca: R$ {st.session_state.bank:.2f}")
+st.markdown(f"### 📈 Lucro: R$ {st.session_state.profit:.2f}")
 
 # =====================================================
-# HISTÓRICO 9x10
+# DRAW COUNTER
 # =====================================================
-st.divider()
-st.subheader("📊 Histórico (Mais recente → Mais antigo)")
-
-def render_history(hist):
-    rows = [hist[i:i+9] for i in range(0, len(hist), 9)]
-    for row in rows[:10]:
-        st.write(" ".join(row))
-
-render_history(st.session_state.history)
+if st.session_state.history:
+    if st.session_state.history[0] == "D":
+        st.session_state.rounds_without_draw = 0
+    else:
+        st.session_state.rounds_without_draw += 1
 
 # =====================================================
-# BLOCO ATIVO
+# HISTÓRICO
 # =====================================================
-def get_active_block(history):
-    base = history[0]
+st.markdown("## 📊 Histórico (Recente → Antigo)")
+
+def icon(x):
+    return "🔴" if x == "R" else "🔵" if x == "B" else "🟡"
+
+st.write(" ".join(icon(x) for x in list(st.session_state.history)[:30]))
+
+# =====================================================
+# CORE ANALYSIS
+# =====================================================
+def extract_blocks(hist):
+    hist = list(hist)
+    if not hist:
+        return []
+
+    blocks = []
+    current = hist[0]
     size = 1
-    for i in range(1, len(history)):
-        if history[i] == base:
+
+    for i in range(1, len(hist)):
+        if hist[i] == current:
             size += 1
         else:
-            break
-    return base, size
+            blocks.append({"color": current, "size": size})
+            current = hist[i]
+            size = 1
 
-# =====================================================
-# EXTRAÇÃO DE BLOCOS (ANTIGO → RECENTE)
-# =====================================================
-def extract_blocks(history):
-    hist = list(reversed(history))  # antigo → recente
-    blocks = []
-    i = 0
-    while i < len(hist):
-        color = hist[i]
-        size = 1
-        i += 1
-        while i < len(hist) and hist[i] == color:
-            size += 1
-            i += 1
-        blocks.append({"color": color, "size": size})
-    return blocks[::-1]  # recente primeiro
+    blocks.append({"color": current, "size": size})
+    return blocks
 
-# =====================================================
-# CICLOS
-# =====================================================
-def classify_block(size):
-    if size == 1:
-        return "CHOPPY"
-    if size == 2:
-        return "CURTO"
-    if size == 3:
-        return "STREAK"
-    return "STREAK_FORTE"
+# -----------------------------------------------------
+# ALTERNÂNCIA REAL (RAW)
+# -----------------------------------------------------
+def detect_alternation_raw(hist, window=8):
+    seq = [x for x in hist if x != "D"][:window]
+    if len(seq) < window:
+        return False, 0.0
 
-def update_cycle(block_type):
+    changes = sum(seq[i] != seq[i+1] for i in range(len(seq)-1))
+    ratio = changes / (len(seq)-1)
+    return ratio >= 0.75, round(ratio, 2)
+
+# -----------------------------------------------------
+# REGIME DE MERCADO
+# -----------------------------------------------------
+def market_regime(hist):
+    blocks = extract_blocks(hist)
+    sizes = [b["size"] for b in blocks if b["color"] != "D"][:6]
+
+    if len(sizes) >= 4 and all(s == 1 for s in sizes):
+        return "CHOPPY PURO"
+
+    if sizes and max(sizes) >= 5:
+        return "DIRECIONAL FORTE"
+
+    if len(sizes) >= 3 and sizes[0] > sizes[1] < sizes[2]:
+        return "FALSA QUEBRA"
+
+    return "MISTO"
+
+# -----------------------------------------------------
+# MEMÓRIA DE CICLOS
+# -----------------------------------------------------
+def update_cycle_memory(regime):
     mem = st.session_state.cycle_memory
-    if not mem or mem[-1] != block_type:
-        mem.append(block_type)
+    if not mem or mem[-1] != regime:
+        mem.append(regime)
     if len(mem) > 3:
         mem[:] = mem[-3:]
 
-# =====================================================
-# FILTRO 1 — FALSA CONTINUIDADE
-# =====================================================
-def false_continuity(blocks, current_size):
-    if current_size < 3 or len(blocks) < 3:
-        return False
-    recent_sizes = [b["size"] for b in blocks[1:4]]
-    return recent_sizes.count(current_size) >= 1
+# -----------------------------------------------------
+# PADRÕES ESTRUTURAIS
+# -----------------------------------------------------
+def detect_patterns(hist):
+    blocks = extract_blocks(hist)
+    patterns = []
+
+    if not blocks:
+        return patterns
+
+    colors = [b["color"] for b in blocks]
+    sizes = [b["size"] for b in blocks]
+
+    # Streak curta
+    if sizes[0] == 2:
+        patterns.append((colors[0], 55, "DUPLO"))
+
+    # Streak média
+    if sizes[0] in [3, 4]:
+        patterns.append((colors[0], 58, "STREAK MÉDIA"))
+
+    # Streak forte
+    if sizes[0] >= 5:
+        patterns.append((colors[0], 62, "STREAK FORTE"))
+
+    # Falsa quebra
+    if len(sizes) >= 3 and sizes[1] == 1 and sizes[0] >= 3:
+        patterns.append((colors[0], 60, "FALSA QUEBRA"))
+
+    # Saturação choppy
+    if len(sizes) >= 5 and all(s == 1 for s in sizes[:5]):
+        patterns.append((colors[0], 59, "SATURAÇÃO"))
+
+    # Pressão de empate
+    if st.session_state.rounds_without_draw >= 28:
+        patterns.append(("D", 65, "PRESSÃO DE EMPATE"))
+
+    return patterns
 
 # =====================================================
-# FILTRO 2 — QUEBRA SIMÉTRICA
+# IA FINAL
 # =====================================================
-def symmetric_break(blocks):
-    if len(blocks) < 2:
-        return False
-    return blocks[0]["size"] == blocks[1]["size"]
+def ia_decision(hist):
+    if not hist:
+        return "⏳ AGUARDAR", 0, "SEM DADOS"
 
-# =====================================================
-# ANÁLISE FINAL
-# =====================================================
-def analyze(history):
-    if len(history) < 3:
-        return "INÍCIO", "WAIT", 0, "SEM LEITURA"
+    regime = market_regime(hist)
+    update_cycle_memory(regime)
 
-    color, size = get_active_block(history)
+    alt, alt_ratio = detect_alternation_raw(hist)
+    patterns = detect_patterns(hist)
 
-    # -------- EMPATE --------
-    if color == "🟡":
-        return "RESET", "WAIT", 0, "EMPATE TRAVA A MESA"
+    # 1️⃣ PRIORIDADE: ALTERNÂNCIA REAL
+    if alt and regime != "DIRECIONAL FORTE":
+        next_color = "R" if hist[0] == "B" else "B"
+        score = int(60 + alt_ratio * 10)
+        return (
+            f"🎯 APOSTAR {'🔴 HOME' if next_color=='R' else '🔵 AWAY'}",
+            score,
+            f"ALTERNÂNCIA REAL ({alt_ratio})"
+        )
 
-    block_type = classify_block(size)
-    update_cycle(block_type)
-    mem = st.session_state.cycle_memory
+    # 2️⃣ STREAK FORTE CONFIRMADA
+    for c, s, p in patterns:
+        if p == "STREAK FORTE" and regime == "DIRECIONAL FORTE":
+            return (
+                f"🎯 APOSTAR {'🔴 HOME' if c=='R' else '🔵 AWAY'}",
+                s + 4,
+                p
+            )
 
-    # -------- FORMAÇÃO --------
-    if size < 3:
-        return "FORMAÇÃO", "WAIT", 0, "BLOCO IMATURO"
+    # 3️⃣ DRAW POR CONTEXTO
+    if st.session_state.rounds_without_draw >= 30 and regime != "CHOPPY PURO":
+        return "🎯 APOSTAR 🟡 DRAW", 66, "DRAW POR PRESSÃO + CONTEXTO"
 
-    # -------- SATURAÇÃO --------
-    if mem.count("STREAK_FORTE") >= 2:
-        return "SATURAÇÃO", "WAIT", 0, "CICLO SATURADO"
+    # 4️⃣ MELHOR PADRÃO RESTANTE
+    if patterns:
+        color, score, pattern = max(patterns, key=lambda x: x[1])
+        if score >= 55:
+            if color == "R":
+                return "🎯 APOSTAR 🔴 HOME", score, pattern
+            if color == "B":
+                return "🎯 APOSTAR 🔵 AWAY", score, pattern
+            return "🎯 APOSTAR 🟡 DRAW", score, pattern
 
-    # -------- ARMADILHA STREAK CURTA --------
-    if size == 3 and history[1] != color and history[1] != "🟡":
-        return "ARMADILHA", "WAIT", 0, "STREAK CURTA SUSPEITA"
-
-    blocks = extract_blocks(history)
-
-    # -------- FALSA CONTINUIDADE --------
-    if false_continuity(blocks, size):
-        return "ARMADILHA", "WAIT", 0, "FALSA CONTINUIDADE"
-
-    # -------- QUEBRA SIMÉTRICA --------
-    if symmetric_break(blocks):
-        return "ARMADILHA", "WAIT", 0, "QUEBRA SIMÉTRICA"
-
-    # -------- ENTRADA --------
-    confidence = 60 + min(size * 3, 12)
-
-    return (
-        f"CONTINUIDADE {color}",
-        color,
-        confidence,
-        f"{block_type} MATURADO"
-    )
+    return "⏳ AGUARDAR", 0, "SEM CONFLUÊNCIA"
 
 # =====================================================
 # OUTPUT
 # =====================================================
-context, suggestion, conf, reading = analyze(st.session_state.history)
+decision, score, context = ia_decision(st.session_state.history)
 
-st.divider()
-st.subheader("🧠 Análise")
+st.markdown("## 🎯 DECISÃO DA IA")
+st.success(f"{decision}\n\nScore: {score}\n\n{context}")
 
-c1, c2, c3 = st.columns(3)
-c1.metric("Contexto", context)
-c2.metric("Confiança", f"{conf}%")
-c3.metric("Ciclo", " → ".join(st.session_state.cycle_memory))
+with st.expander("🧠 Regime & Ciclos"):
+    st.write("Regime atual:", market_regime(st.session_state.history))
+    st.write("Memória:", st.session_state.cycle_memory)
 
-st.info(f"📌 Leitura: {reading}")
-
-st.subheader("🎯 Decisão")
-if suggestion in ["🔴", "🔵"]:
-    st.success(f"ENTRADA SUGERIDA: {suggestion} ({conf}%)")
-else:
-    st.warning("AGUARDAR – proteção de banca ativa")
-
-st.caption(
-    "Sistema final consolidado: bloco ativo, maturação, memória de ciclo, "
-    "saturação, armadilhas avançadas (falsa continuidade e quebra simétrica). "
-    "Menos entradas, erro real drasticamente menor."
-)
+with st.expander("🟡 Estatística de Empate"):
+    st.write(f"Rodadas sem Draw: {st.session_state.rounds_without_draw}")

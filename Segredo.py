@@ -4,11 +4,7 @@ from collections import deque
 # =====================================================
 # CONFIG
 # =====================================================
-st.set_page_config(
-    page_title="Football Studio PRO ULTIMATE",
-    layout="centered"
-)
-
+st.set_page_config(page_title="Football Studio PRO ULTIMATE", layout="centered")
 MAX_HISTORY = 120
 
 # =====================================================
@@ -19,12 +15,6 @@ if "history" not in st.session_state:
 
 if "cycle_memory" not in st.session_state:
     st.session_state.cycle_memory = []
-
-if "bank" not in st.session_state:
-    st.session_state.bank = 1000.0
-
-if "profit" not in st.session_state:
-    st.session_state.profit = 0.0
 
 if "rounds_without_draw" not in st.session_state:
     st.session_state.rounds_without_draw = 0
@@ -42,9 +32,6 @@ if c2.button("🔵 Away"):
 if c3.button("🟡 Draw"):
     st.session_state.history.appendleft("D")
 
-st.markdown(f"### 💰 Banca: R$ {st.session_state.bank:.2f}")
-st.markdown(f"### 📈 Lucro: R$ {st.session_state.profit:.2f}")
-
 # =====================================================
 # DRAW COUNTER
 # =====================================================
@@ -57,15 +44,14 @@ if st.session_state.history:
 # =====================================================
 # HISTÓRICO
 # =====================================================
-st.markdown("## 📊 Histórico (Recente → Antigo)")
-
 def icon(x):
     return "🔴" if x == "R" else "🔵" if x == "B" else "🟡"
 
+st.markdown("## 📊 Histórico (Recente → Antigo)")
 st.write(" ".join(icon(x) for x in list(st.session_state.history)[:30]))
 
 # =====================================================
-# CORE ANALYSIS
+# CORE ENGINE
 # =====================================================
 def extract_blocks(hist):
     hist = list(hist)
@@ -83,7 +69,6 @@ def extract_blocks(hist):
             blocks.append({"color": current, "size": size})
             current = hist[i]
             size = 1
-
     blocks.append({"color": current, "size": size})
     return blocks
 
@@ -106,65 +91,97 @@ def market_regime(hist):
     blocks = extract_blocks(hist)
     sizes = [b["size"] for b in blocks if b["color"] != "D"][:6]
 
-    if len(sizes) >= 4 and all(s == 1 for s in sizes):
+    if len(sizes) >= 4 and all(s == 1 for s in sizes[:4]):
         return "CHOPPY PURO"
-
-    if sizes and max(sizes) >= 5:
+    if sizes and max(sizes) >= 6:
         return "DIRECIONAL FORTE"
-
     if len(sizes) >= 3 and sizes[0] > sizes[1] < sizes[2]:
         return "FALSA QUEBRA"
-
     return "MISTO"
 
 # -----------------------------------------------------
-# MEMÓRIA DE CICLOS
+# MAPA DE MANIPULAÇÃO (1–9)
 # -----------------------------------------------------
-def update_cycle_memory(regime):
-    mem = st.session_state.cycle_memory
-    if not mem or mem[-1] != regime:
-        mem.append(regime)
-    if len(mem) > 3:
-        mem[:] = mem[-3:]
-
-# -----------------------------------------------------
-# PADRÕES ESTRUTURAIS
-# -----------------------------------------------------
-def detect_patterns(hist):
+def manipulation_level(hist):
     blocks = extract_blocks(hist)
-    patterns = []
+    sizes = [b["size"] for b in blocks if b["color"] != "D"][:6]
 
-    if not blocks:
-        return patterns
+    if not sizes:
+        return 1, "SEM DADOS"
 
-    colors = [b["color"] for b in blocks]
-    sizes = [b["size"] for b in blocks]
-
-    # Streak curta
-    if sizes[0] == 2:
-        patterns.append((colors[0], 55, "DUPLO"))
-
-    # Streak média
-    if sizes[0] in [3, 4]:
-        patterns.append((colors[0], 58, "STREAK MÉDIA"))
-
-    # Streak forte
-    if sizes[0] >= 5:
-        patterns.append((colors[0], 62, "STREAK FORTE"))
-
-    # Falsa quebra
-    if len(sizes) >= 3 and sizes[1] == 1 and sizes[0] >= 3:
-        patterns.append((colors[0], 60, "FALSA QUEBRA"))
-
-    # Saturação choppy
     if len(sizes) >= 5 and all(s == 1 for s in sizes[:5]):
-        patterns.append((colors[0], 59, "SATURAÇÃO"))
+        return 2, "ALTERNÂNCIA SIMPLES"
 
-    # Pressão de empate
+    if len(sizes) >= 7 and all(s == 1 for s in sizes[:7]):
+        return 3, "ALTERNÂNCIA ESTENDIDA"
+
+    if max(sizes) in [2, 3]:
+        return 4, "DIRECIONAL CURTO"
+
+    if max(sizes) in [4, 5]:
+        return 5, "DIRECIONAL MÉDIO"
+
+    if max(sizes) >= 6:
+        return 6, "DIRECIONAL FORTE"
+
+    if len(sizes) >= 3 and sizes[1] == 1 and sizes[0] >= 3:
+        return 7, "FALSA QUEBRA"
+
+    if len(sizes) >= 6 and all(s >= 3 for s in sizes[:6]):
+        return 8, "SATURAÇÃO"
+
+    if st.session_state.rounds_without_draw >= 30:
+        return 9, "MANIPULAÇÃO ATIVA (DRAW)"
+
+    return 3, "NEUTRO"
+
+# -----------------------------------------------------
+# PROBABILIDADES MULTICENÁRIO
+# -----------------------------------------------------
+def probability_engine(hist):
+    base = {"R": 33.0, "B": 33.0, "D": 34.0}
+    blocks = extract_blocks(hist)
+    last = hist[0]
+
+    alt, ratio = detect_alternation_raw(hist)
+
+    if alt:
+        opp = "R" if last == "B" else "B"
+        base[opp] += 18 * ratio
+        base[last] -= 10
+
+    if blocks and blocks[0]["size"] >= 4:
+        base[blocks[0]["color"]] += 15
+
     if st.session_state.rounds_without_draw >= 28:
-        patterns.append(("D", 65, "PRESSÃO DE EMPATE"))
+        base["D"] += 20
 
-    return patterns
+    total = sum(base.values())
+    for k in base:
+        base[k] = round((base[k] / total) * 100, 1)
+
+    return base
+
+# -----------------------------------------------------
+# CASSINO vs JOGADOR
+# -----------------------------------------------------
+def casino_reading(level, regime):
+    if level >= 7:
+        return "🎰 Cassino criando armadilha psicológica"
+    if regime == "DIRECIONAL FORTE":
+        return "🎰 Cassino empurrando continuidade"
+    if regime == "CHOPPY PURO":
+        return "🎰 Cassino neutralizando padrões"
+    return "🎰 Fluxo neutro"
+
+def player_reading(level, alt):
+    if alt and level <= 3:
+        return "🧠 Explorar alternância"
+    if level >= 7:
+        return "🧠 Aguardar quebra real"
+    if level >= 5:
+        return "🧠 Seguir direção com cautela"
+    return "🧠 Aguardar melhor contexto"
 
 # =====================================================
 # IA FINAL
@@ -174,12 +191,15 @@ def ia_decision(hist):
         return "⏳ AGUARDAR", 0, "SEM DADOS"
 
     regime = market_regime(hist)
-    update_cycle_memory(regime)
-
+    level, level_desc = manipulation_level(hist)
     alt, alt_ratio = detect_alternation_raw(hist)
-    patterns = detect_patterns(hist)
+    probs = probability_engine(hist)
 
-    # 1️⃣ PRIORIDADE: ALTERNÂNCIA REAL
+    # PRIORIDADE 1 — MANIPULAÇÃO ATIVA
+    if level >= 8:
+        return "⛔ NÃO OPERAR", 0, level_desc
+
+    # PRIORIDADE 2 — ALTERNÂNCIA REAL
     if alt and regime != "DIRECIONAL FORTE":
         next_color = "R" if hist[0] == "B" else "B"
         score = int(60 + alt_ratio * 10)
@@ -189,28 +209,18 @@ def ia_decision(hist):
             f"ALTERNÂNCIA REAL ({alt_ratio})"
         )
 
-    # 2️⃣ STREAK FORTE CONFIRMADA
-    for c, s, p in patterns:
-        if p == "STREAK FORTE" and regime == "DIRECIONAL FORTE":
-            return (
-                f"🎯 APOSTAR {'🔴 HOME' if c=='R' else '🔵 AWAY'}",
-                s + 4,
-                p
-            )
+    # PRIORIDADE 3 — DIREÇÃO
+    if regime == "DIRECIONAL FORTE":
+        color = extract_blocks(hist)[0]["color"]
+        return (
+            f"🎯 APOSTAR {'🔴 HOME' if color=='R' else '🔵 AWAY'}",
+            62,
+            "DIRECIONAL FORTE"
+        )
 
-    # 3️⃣ DRAW POR CONTEXTO
-    if st.session_state.rounds_without_draw >= 30 and regime != "CHOPPY PURO":
-        return "🎯 APOSTAR 🟡 DRAW", 66, "DRAW POR PRESSÃO + CONTEXTO"
-
-    # 4️⃣ MELHOR PADRÃO RESTANTE
-    if patterns:
-        color, score, pattern = max(patterns, key=lambda x: x[1])
-        if score >= 55:
-            if color == "R":
-                return "🎯 APOSTAR 🔴 HOME", score, pattern
-            if color == "B":
-                return "🎯 APOSTAR 🔵 AWAY", score, pattern
-            return "🎯 APOSTAR 🟡 DRAW", score, pattern
+    # PRIORIDADE 4 — DRAW
+    if st.session_state.rounds_without_draw >= 30:
+        return "🎯 APOSTAR 🟡 DRAW", 66, "PRESSÃO DE EMPATE"
 
     return "⏳ AGUARDAR", 0, "SEM CONFLUÊNCIA"
 
@@ -218,13 +228,28 @@ def ia_decision(hist):
 # OUTPUT
 # =====================================================
 decision, score, context = ia_decision(st.session_state.history)
+level, level_desc = manipulation_level(st.session_state.history)
+probs = probability_engine(st.session_state.history)
+alt, _ = detect_alternation_raw(st.session_state.history)
+regime = market_regime(st.session_state.history)
 
 st.markdown("## 🎯 DECISÃO DA IA")
 st.success(f"{decision}\n\nScore: {score}\n\n{context}")
 
-with st.expander("🧠 Regime & Ciclos"):
-    st.write("Regime atual:", market_regime(st.session_state.history))
-    st.write("Memória:", st.session_state.cycle_memory)
+st.markdown("## 🧬 MAPA DE MANIPULAÇÃO")
+st.info(f"Nível {level} — {level_desc}")
+
+st.markdown("## 📊 PROBABILIDADES")
+st.write(f"🔴 Home: {probs['R']}%")
+st.write(f"🔵 Away: {probs['B']}%")
+st.write(f"🟡 Draw: {probs['D']}%")
+
+st.markdown("## 🎰 vs 🧠 LEITURA ESTRATÉGICA")
+st.warning(casino_reading(level, regime))
+st.success(player_reading(level, alt))
+
+with st.expander("🧠 Regime Atual"):
+    st.write(regime)
 
 with st.expander("🟡 Estatística de Empate"):
     st.write(f"Rodadas sem Draw: {st.session_state.rounds_without_draw}")

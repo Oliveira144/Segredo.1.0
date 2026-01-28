@@ -13,9 +13,6 @@ MAX_HISTORY = 120
 if "history" not in st.session_state:
     st.session_state.history = deque(maxlen=MAX_HISTORY)
 
-if "cycle_memory" not in st.session_state:
-    st.session_state.cycle_memory = []
-
 if "rounds_without_draw" not in st.session_state:
     st.session_state.rounds_without_draw = 0
 
@@ -57,45 +54,39 @@ def extract_blocks(hist):
     hist = list(hist)
     if not hist:
         return []
-
-    blocks = []
-    current = hist[0]
-    size = 1
-
+    blocks, current, size = [], hist[0], 1
     for i in range(1, len(hist)):
         if hist[i] == current:
             size += 1
         else:
             blocks.append({"color": current, "size": size})
-            current = hist[i]
-            size = 1
+            current, size = hist[i], 1
     blocks.append({"color": current, "size": size})
     return blocks
 
 # -----------------------------------------------------
-# ALTERNÂNCIA REAL (RAW)
+# ALTERNÂNCIA REAL
 # -----------------------------------------------------
 def detect_alternation_raw(hist, window=8):
     seq = [x for x in hist if x != "D"][:window]
     if len(seq) < window:
         return False, 0.0
-
     changes = sum(seq[i] != seq[i+1] for i in range(len(seq)-1))
     ratio = changes / (len(seq)-1)
-    return ratio >= 0.75, round(ratio, 2)
+    return ratio >= 0.65, round(ratio, 2)
 
 # -----------------------------------------------------
-# REGIME DE MERCADO
+# REGIME
 # -----------------------------------------------------
 def market_regime(hist):
     blocks = extract_blocks(hist)
     sizes = [b["size"] for b in blocks if b["color"] != "D"][:6]
 
     if len(sizes) >= 4 and all(s == 1 for s in sizes[:4]):
-        return "CHOPPY PURO"
+        return "CHOPPY"
     if sizes and max(sizes) >= 6:
         return "DIRECIONAL FORTE"
-    if len(sizes) >= 3 and sizes[0] > sizes[1] < sizes[2]:
+    if len(sizes) >= 3 and sizes[1] == 1 and sizes[0] >= 3:
         return "FALSA QUEBRA"
     return "MISTO"
 
@@ -108,53 +99,48 @@ def manipulation_level(hist):
 
     if not sizes:
         return 1, "SEM DADOS"
-
     if len(sizes) >= 5 and all(s == 1 for s in sizes[:5]):
-        return 2, "ALTERNÂNCIA SIMPLES"
-
-    if len(sizes) >= 7 and all(s == 1 for s in sizes[:7]):
-        return 3, "ALTERNÂNCIA ESTENDIDA"
-
+        return 3, "ALTERNÂNCIA CONTROLADA"
     if max(sizes) in [2, 3]:
         return 4, "DIRECIONAL CURTO"
-
     if max(sizes) in [4, 5]:
         return 5, "DIRECIONAL MÉDIO"
-
     if max(sizes) >= 6:
         return 6, "DIRECIONAL FORTE"
-
     if len(sizes) >= 3 and sizes[1] == 1 and sizes[0] >= 3:
         return 7, "FALSA QUEBRA"
-
-    if len(sizes) >= 6 and all(s >= 3 for s in sizes[:6]):
-        return 8, "SATURAÇÃO"
-
     if st.session_state.rounds_without_draw >= 30:
         return 9, "MANIPULAÇÃO ATIVA (DRAW)"
-
     return 3, "NEUTRO"
 
 # -----------------------------------------------------
-# PROBABILIDADES MULTICENÁRIO
+# VIÉS DIRECIONAL CURTO (🔥 DESBLOQUEIA ENTRADAS)
+# -----------------------------------------------------
+def short_term_bias(hist, window=5):
+    seq = [x for x in hist if x != "D"][:window]
+    if len(seq) < window:
+        return None
+    if seq.count("R") >= window - 1:
+        return "R"
+    if seq.count("B") >= window - 1:
+        return "B"
+    return None
+
+# -----------------------------------------------------
+# PROBABILIDADES
 # -----------------------------------------------------
 def probability_engine(hist):
     base = {"R": 33.0, "B": 33.0, "D": 34.0}
-    blocks = extract_blocks(hist)
     last = hist[0]
 
     alt, ratio = detect_alternation_raw(hist)
-
     if alt:
         opp = "R" if last == "B" else "B"
-        base[opp] += 18 * ratio
-        base[last] -= 10
-
-    if blocks and blocks[0]["size"] >= 4:
-        base[blocks[0]["color"]] += 15
+        base[opp] += 15
+        base[last] -= 8
 
     if st.session_state.rounds_without_draw >= 28:
-        base["D"] += 20
+        base["D"] += 15
 
     total = sum(base.values())
     for k in base:
@@ -162,67 +148,38 @@ def probability_engine(hist):
 
     return base
 
-# -----------------------------------------------------
-# CASSINO vs JOGADOR
-# -----------------------------------------------------
-def casino_reading(level, regime):
-    if level >= 7:
-        return "🎰 Cassino criando armadilha psicológica"
-    if regime == "DIRECIONAL FORTE":
-        return "🎰 Cassino empurrando continuidade"
-    if regime == "CHOPPY PURO":
-        return "🎰 Cassino neutralizando padrões"
-    return "🎰 Fluxo neutro"
-
-def player_reading(level, alt):
-    if alt and level <= 3:
-        return "🧠 Explorar alternância"
-    if level >= 7:
-        return "🧠 Aguardar quebra real"
-    if level >= 5:
-        return "🧠 Seguir direção com cautela"
-    return "🧠 Aguardar melhor contexto"
-
 # =====================================================
-# IA FINAL
+# IA FINAL (CORRIGIDA)
 # =====================================================
 def ia_decision(hist):
-    if not hist:
-        return "⏳ AGUARDAR", 0, "SEM DADOS"
-
     regime = market_regime(hist)
     level, level_desc = manipulation_level(hist)
     alt, alt_ratio = detect_alternation_raw(hist)
-    probs = probability_engine(hist)
+    bias = short_term_bias(hist)
 
-    # PRIORIDADE 1 — MANIPULAÇÃO ATIVA
+    # ⛔ ARMADILHA
     if level >= 8:
         return "⛔ NÃO OPERAR", 0, level_desc
 
-    # PRIORIDADE 2 — ALTERNÂNCIA REAL
+    # 🔁 ALTERNÂNCIA
     if alt and regime != "DIRECIONAL FORTE":
         next_color = "R" if hist[0] == "B" else "B"
-        score = int(60 + alt_ratio * 10)
-        return (
-            f"🎯 APOSTAR {'🔴 HOME' if next_color=='R' else '🔵 AWAY'}",
-            score,
-            f"ALTERNÂNCIA REAL ({alt_ratio})"
-        )
+        return f"🎯 APOSTAR {'🔴 HOME' if next_color=='R' else '🔵 AWAY'}", 60, "ALTERNÂNCIA REAL"
 
-    # PRIORIDADE 3 — DIREÇÃO
+    # 🔥 DIRECIONAL FORTE
     if regime == "DIRECIONAL FORTE":
         color = extract_blocks(hist)[0]["color"]
-        return (
-            f"🎯 APOSTAR {'🔴 HOME' if color=='R' else '🔵 AWAY'}",
-            62,
-            "DIRECIONAL FORTE"
-        )
+        return f"🎯 APOSTAR {'🔴 HOME' if color=='R' else '🔵 AWAY'}", 62, "DIRECIONAL FORTE"
 
-    # PRIORIDADE 4 — DRAW
+    # 🔥🔥 DIRECIONAL CURTO (NÍVEL 3–5)
+    if level in [3, 4, 5] and bias:
+        return f"🎯 APOSTAR {'🔴 HOME' if bias=='R' else '🔵 AWAY'}", 56, f"DIRECIONAL CURTO (NÍVEL {level})"
+
+    # 🟡 DRAW
     if st.session_state.rounds_without_draw >= 30:
-        return "🎯 APOSTAR 🟡 DRAW", 66, "PRESSÃO DE EMPATE"
+        return "🎯 APOSTAR 🟡 DRAW", 65, "PRESSÃO DE EMPATE"
 
-    return "⏳ AGUARDAR", 0, "SEM CONFLUÊNCIA"
+    return "⏳ AGUARDAR", 0, "SEM VANTAGEM"
 
 # =====================================================
 # OUTPUT
@@ -230,7 +187,6 @@ def ia_decision(hist):
 decision, score, context = ia_decision(st.session_state.history)
 level, level_desc = manipulation_level(st.session_state.history)
 probs = probability_engine(st.session_state.history)
-alt, _ = detect_alternation_raw(st.session_state.history)
 regime = market_regime(st.session_state.history)
 
 st.markdown("## 🎯 DECISÃO DA IA")
@@ -244,12 +200,6 @@ st.write(f"🔴 Home: {probs['R']}%")
 st.write(f"🔵 Away: {probs['B']}%")
 st.write(f"🟡 Draw: {probs['D']}%")
 
-st.markdown("## 🎰 vs 🧠 LEITURA ESTRATÉGICA")
-st.warning(casino_reading(level, regime))
-st.success(player_reading(level, alt))
-
-with st.expander("🧠 Regime Atual"):
-    st.write(regime)
-
-with st.expander("🟡 Estatística de Empate"):
-    st.write(f"Rodadas sem Draw: {st.session_state.rounds_without_draw}")
+st.markdown("## 🎰 vs 🧠 LEITURA")
+st.warning(f"🎰 Cassino: {regime}")
+st.success("🧠 Jogador: Explorar vantagem estrutural")

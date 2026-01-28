@@ -1,186 +1,185 @@
 import streamlit as st
-from collections import deque
+from collections import deque, Counter
 
-# =====================================================
+# ======================================================
 # CONFIG
-# =====================================================
-st.set_page_config(page_title="Football Studio PRO ULTIMATE", layout="centered")
+# ======================================================
+st.set_page_config("Football Studio – Manipulation AI", layout="centered")
 MAX_HISTORY = 120
 
-# =====================================================
+# ======================================================
 # STATE
-# =====================================================
+# ======================================================
 if "history" not in st.session_state:
     st.session_state.history = deque(maxlen=MAX_HISTORY)
 
 if "rounds_without_draw" not in st.session_state:
     st.session_state.rounds_without_draw = 0
 
-# =====================================================
-# UI
-# =====================================================
-st.title("⚽ Football Studio – PRO ULTIMATE")
+# ======================================================
+# UI INPUT
+# ======================================================
+st.title("⚽ Football Studio – Manipulation AI")
 
 c1, c2, c3 = st.columns(3)
-if c1.button("🔴 Home"):
+if c1.button("🔴 HOME"):
     st.session_state.history.appendleft("R")
-if c2.button("🔵 Away"):
+if c2.button("🔵 AWAY"):
     st.session_state.history.appendleft("B")
-if c3.button("🟡 Draw"):
+if c3.button("🟡 DRAW"):
     st.session_state.history.appendleft("D")
 
-# =====================================================
-# DRAW COUNTER
-# =====================================================
+# ======================================================
+# DRAW CONTROL
+# ======================================================
 if st.session_state.history:
     if st.session_state.history[0] == "D":
         st.session_state.rounds_without_draw = 0
     else:
         st.session_state.rounds_without_draw += 1
 
-# =====================================================
-# HISTÓRICO
-# =====================================================
+# ======================================================
+# HELPERS
+# ======================================================
 def icon(x):
-    return "🔴" if x == "R" else "🔵" if x == "B" else "🟡"
+    return {"R":"🔴","B":"🔵","D":"🟡"}[x]
 
-st.markdown("## 📊 Histórico (Recente → Antigo)")
-st.write(" ".join(icon(x) for x in list(st.session_state.history)[:30]))
-
-# =====================================================
-# CORE ENGINE
-# =====================================================
-def extract_blocks(hist):
+def blocks(hist):
     hist = list(hist)
     if not hist:
         return []
-    blocks, current, size = [], hist[0], 1
-    for i in range(1, len(hist)):
-        if hist[i] == current:
+    out, cur, size = [], hist[0], 1
+    for x in hist[1:]:
+        if x == cur:
             size += 1
         else:
-            blocks.append({"color": current, "size": size})
-            current, size = hist[i], 1
-    blocks.append({"color": current, "size": size})
-    return blocks
+            out.append((cur, size))
+            cur, size = x, 1
+    out.append((cur, size))
+    return out
 
-def detect_alternation_raw(hist, window=8):
-    seq = [x for x in hist if x != "D"][:window]
-    if len(seq) < window:
-        return False, 0.0
-    changes = sum(seq[i] != seq[i+1] for i in range(len(seq)-1))
-    ratio = changes / (len(seq)-1)
-    return ratio >= 0.65, round(ratio, 2)
+# ======================================================
+# HISTÓRICO
+# ======================================================
+st.markdown("## 📊 Histórico (Recente → Antigo)")
+st.write(" ".join(icon(x) for x in list(st.session_state.history)[:30]))
 
-def market_regime(hist):
-    blocks = extract_blocks(hist)
-    sizes = [b["size"] for b in blocks if b["color"] != "D"][:6]
-    if len(sizes) >= 4 and all(s == 1 for s in sizes[:4]):
-        return "CHOPPY"
-    if sizes and max(sizes) >= 6:
-        return "DIRECIONAL FORTE"
-    if len(sizes) >= 3 and sizes[1] == 1 and sizes[0] >= 3:
-        return "FALSA QUEBRA"
-    return "MISTO"
-
+# ======================================================
+# MANIPULATION MAP (1–9)
+# ======================================================
 def manipulation_level(hist):
-    blocks = extract_blocks(hist)
-    sizes = [b["size"] for b in blocks if b["color"] != "D"][:6]
-    if not sizes:
-        return 1, "SEM DADOS"
-    if len(sizes) >= 5 and all(s == 1 for s in sizes[:5]):
-        return 3, "ALTERNÂNCIA CONTROLADA"
-    if max(sizes) in [2, 3]:
-        return 4, "DIRECIONAL CURTO"
-    if max(sizes) in [4, 5]:
-        return 5, "DIRECIONAL MÉDIO"
-    if max(sizes) >= 6:
-        return 6, "DIRECIONAL FORTE"
-    if len(sizes) >= 3 and sizes[1] == 1 and sizes[0] >= 3:
-        return 7, "FALSA QUEBRA"
+    if len(hist) < 6:
+        return 1, "Ruído"
+
+    bl = blocks(hist)
+    sizes = [s for c,s in bl if c != "D"][:6]
+
     if st.session_state.rounds_without_draw >= 30:
-        return 9, "MANIPULAÇÃO ATIVA (DRAW)"
-    return 3, "NEUTRO"
+        return 9, "Pressão extrema (empate)"
 
-def short_term_bias(hist, window=5):
-    seq = [x for x in hist if x != "D"][:window]
-    if len(seq) < window:
-        return None
-    if seq.count("R") >= window - 1:
-        return "R"
-    if seq.count("B") >= window - 1:
-        return "B"
-    return None
+    if len(sizes) >= 5 and all(s == 1 for s in sizes[:5]):
+        return 3, "Alternância simples"
 
+    if max(sizes) == 2:
+        return 4, "Direcional curto"
+
+    if max(sizes) in [3,4]:
+        return 5, "Direcional médio"
+
+    if max(sizes) >= 5:
+        return 6, "Direcional forte"
+
+    if sizes[0] >= 4 and sizes[1] == 1:
+        return 7, "Falsa quebra"
+
+    return 2, "Padrão fraco"
+
+# ======================================================
+# PROBABILITIES (MULTI-CENÁRIO)
+# ======================================================
 def probability_engine(hist):
     if not hist:
-        return {"R": 33.3, "B": 33.3, "D": 33.4}
+        return {"R":33,"B":33,"D":34}
 
-    base = {"R": 33.0, "B": 33.0, "D": 34.0}
-    last = hist[0]
-
-    alt, _ = detect_alternation_raw(hist)
-    if alt:
-        opp = "R" if last == "B" else "B"
-        base[opp] += 15
-        base[last] -= 8
-
-    if st.session_state.rounds_without_draw >= 28:
-        base["D"] += 15
-
+    base = Counter(hist)
     total = sum(base.values())
-    for k in base:
-        base[k] = round((base[k] / total) * 100, 1)
 
-    return base
+    structural = {
+        "R": base["R"]/total,
+        "B": base["B"]/total,
+        "D": base["D"]/total
+    }
 
+    alt_bias = {"R":0,"B":0,"D":0}
+    if len(hist) >= 4 and hist[0] != hist[1]:
+        alt_bias["R" if hist[0]=="B" else "B"] += 0.15
+
+    draw_bias = {"R":0,"B":0,"D":0}
+    if st.session_state.rounds_without_draw >= 28:
+        draw_bias["D"] += 0.25
+
+    final = {}
+    for k in ["R","B","D"]:
+        final[k] = round((structural[k] + alt_bias[k] + draw_bias[k]) * 100,1)
+
+    return final
+
+# ======================================================
+# CASINO VS PLAYER
+# ======================================================
+def casino_reading(hist):
+    if len(hist) < 5:
+        return "Induzindo overleitura"
+    if hist[0] == hist[1]:
+        return "Forçando continuidade"
+    return "Forçando alternância"
+
+def player_reading(hist, level):
+    if level >= 7:
+        return "Evitar armadilha"
+    if level in [4,5]:
+        return "Explorar direção"
+    if level == 9:
+        return "Empate com valor"
+    return "Aguardar"
+
+# ======================================================
+# IA DECISION (NUNCA FICA MUDA)
+# ======================================================
 def ia_decision(hist):
-    if not hist:
-        return "⏳ AGUARDAR", 0, "SEM DADOS"
+    level, desc = manipulation_level(hist)
+    probs = probability_engine(hist)
 
-    regime = market_regime(hist)
-    level, level_desc = manipulation_level(hist)
-    alt, _ = detect_alternation_raw(hist)
-    bias = short_term_bias(hist)
+    best = max(probs, key=probs.get)
+    conf = probs[best]
 
     if level >= 8:
-        return "⛔ NÃO OPERAR", 0, level_desc
+        return "⛔ NÃO OPERAR", conf, desc
 
-    if alt and regime != "DIRECIONAL FORTE":
-        next_color = "R" if hist[0] == "B" else "B"
-        return f"🎯 APOSTAR {'🔴 HOME' if next_color=='R' else '🔵 AWAY'}", 60, "ALTERNÂNCIA REAL"
+    if conf >= 55:
+        label = "🔴 HOME" if best=="R" else "🔵 AWAY" if best=="B" else "🟡 DRAW"
+        return f"🎯 ENTRAR {label}", conf, desc
 
-    if regime == "DIRECIONAL FORTE":
-        color = extract_blocks(hist)[0]["color"]
-        return f"🎯 APOSTAR {'🔴 HOME' if color=='R' else '🔵 AWAY'}", 62, "DIRECIONAL FORTE"
+    return "⏳ AGUARDAR", conf, desc
 
-    if level in [3, 4, 5] and bias:
-        return f"🎯 APOSTAR {'🔴 HOME' if bias=='R' else '🔵 AWAY'}", 56, f"DIRECIONAL CURTO (NÍVEL {level})"
-
-    if st.session_state.rounds_without_draw >= 30:
-        return "🎯 APOSTAR 🟡 DRAW", 65, "PRESSÃO DE EMPATE"
-
-    return "⏳ AGUARDAR", 0, "SEM VANTAGEM"
-
-# =====================================================
+# ======================================================
 # OUTPUT
-# =====================================================
-decision, score, context = ia_decision(st.session_state.history)
+# ======================================================
+decision, confidence, context = ia_decision(st.session_state.history)
 level, level_desc = manipulation_level(st.session_state.history)
 probs = probability_engine(st.session_state.history)
-regime = market_regime(st.session_state.history)
 
 st.markdown("## 🎯 DECISÃO DA IA")
-st.success(f"{decision}\n\nScore: {score}\n\n{context}")
+st.success(f"{decision}\n\nConfiança: {confidence}%\n\n{context}")
 
 st.markdown("## 🧬 MAPA DE MANIPULAÇÃO")
 st.info(f"Nível {level} — {level_desc}")
 
-st.markdown("## 📊 PROBABILIDADES")
+st.markdown("## 📊 PROBABILIDADES FINAIS")
 st.write(f"🔴 Home: {probs['R']}%")
 st.write(f"🔵 Away: {probs['B']}%")
 st.write(f"🟡 Draw: {probs['D']}%")
 
-st.markdown("## 🎰 vs 🧠 LEITURA")
-st.warning(f"🎰 Cassino: {regime}")
-st.success("🧠 Jogador: Explorar vantagem estrutural")
+st.markdown("## 🎰 Cassino vs 🧠 Jogador")
+st.warning(f"🎰 Cassino: {casino_reading(st.session_state.history)}")
+st.success(f"🧠 Jogador: {player_reading(st.session_state.history, level)}")

@@ -64,9 +64,6 @@ def extract_blocks(hist):
     blocks.append({"color": current, "size": size})
     return blocks
 
-# -----------------------------------------------------
-# ALTERNÂNCIA REAL
-# -----------------------------------------------------
 def detect_alternation_raw(hist, window=8):
     seq = [x for x in hist if x != "D"][:window]
     if len(seq) < window:
@@ -75,13 +72,9 @@ def detect_alternation_raw(hist, window=8):
     ratio = changes / (len(seq)-1)
     return ratio >= 0.65, round(ratio, 2)
 
-# -----------------------------------------------------
-# REGIME
-# -----------------------------------------------------
 def market_regime(hist):
     blocks = extract_blocks(hist)
     sizes = [b["size"] for b in blocks if b["color"] != "D"][:6]
-
     if len(sizes) >= 4 and all(s == 1 for s in sizes[:4]):
         return "CHOPPY"
     if sizes and max(sizes) >= 6:
@@ -90,13 +83,9 @@ def market_regime(hist):
         return "FALSA QUEBRA"
     return "MISTO"
 
-# -----------------------------------------------------
-# MAPA DE MANIPULAÇÃO (1–9)
-# -----------------------------------------------------
 def manipulation_level(hist):
     blocks = extract_blocks(hist)
     sizes = [b["size"] for b in blocks if b["color"] != "D"][:6]
-
     if not sizes:
         return 1, "SEM DADOS"
     if len(sizes) >= 5 and all(s == 1 for s in sizes[:5]):
@@ -113,9 +102,6 @@ def manipulation_level(hist):
         return 9, "MANIPULAÇÃO ATIVA (DRAW)"
     return 3, "NEUTRO"
 
-# -----------------------------------------------------
-# VIÉS DIRECIONAL CURTO (🔥 DESBLOQUEIA ENTRADAS)
-# -----------------------------------------------------
 def short_term_bias(hist, window=5):
     seq = [x for x in hist if x != "D"][:window]
     if len(seq) < window:
@@ -126,14 +112,14 @@ def short_term_bias(hist, window=5):
         return "B"
     return None
 
-# -----------------------------------------------------
-# PROBABILIDADES
-# -----------------------------------------------------
 def probability_engine(hist):
+    if not hist:
+        return {"R": 33.3, "B": 33.3, "D": 33.4}
+
     base = {"R": 33.0, "B": 33.0, "D": 34.0}
     last = hist[0]
 
-    alt, ratio = detect_alternation_raw(hist)
+    alt, _ = detect_alternation_raw(hist)
     if alt:
         opp = "R" if last == "B" else "B"
         base[opp] += 15
@@ -148,34 +134,29 @@ def probability_engine(hist):
 
     return base
 
-# =====================================================
-# IA FINAL (CORRIGIDA)
-# =====================================================
 def ia_decision(hist):
+    if not hist:
+        return "⏳ AGUARDAR", 0, "SEM DADOS"
+
     regime = market_regime(hist)
     level, level_desc = manipulation_level(hist)
-    alt, alt_ratio = detect_alternation_raw(hist)
+    alt, _ = detect_alternation_raw(hist)
     bias = short_term_bias(hist)
 
-    # ⛔ ARMADILHA
     if level >= 8:
         return "⛔ NÃO OPERAR", 0, level_desc
 
-    # 🔁 ALTERNÂNCIA
     if alt and regime != "DIRECIONAL FORTE":
         next_color = "R" if hist[0] == "B" else "B"
         return f"🎯 APOSTAR {'🔴 HOME' if next_color=='R' else '🔵 AWAY'}", 60, "ALTERNÂNCIA REAL"
 
-    # 🔥 DIRECIONAL FORTE
     if regime == "DIRECIONAL FORTE":
         color = extract_blocks(hist)[0]["color"]
         return f"🎯 APOSTAR {'🔴 HOME' if color=='R' else '🔵 AWAY'}", 62, "DIRECIONAL FORTE"
 
-    # 🔥🔥 DIRECIONAL CURTO (NÍVEL 3–5)
     if level in [3, 4, 5] and bias:
         return f"🎯 APOSTAR {'🔴 HOME' if bias=='R' else '🔵 AWAY'}", 56, f"DIRECIONAL CURTO (NÍVEL {level})"
 
-    # 🟡 DRAW
     if st.session_state.rounds_without_draw >= 30:
         return "🎯 APOSTAR 🟡 DRAW", 65, "PRESSÃO DE EMPATE"
 
